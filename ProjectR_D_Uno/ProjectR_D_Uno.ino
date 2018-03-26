@@ -8,11 +8,17 @@
 #define pinMOSI     6
 #define pinVCC      8
 #define slaveSelectPin      10
+<<<<<<< HEAD
 
 #define LED_nhieu    4
 #define LED_slow    3
 #define LED_speed   2
 #define LED_high    1
+=======
+//comment
+#define LED_speed   0
+#define LED_high    0
+>>>>>>> 62355f9ab2482b1b0663ae494608f1682f0fba4d
 #define LED_low     0
 
 #define   SYMBOL_HEADER_Serial          0x40
