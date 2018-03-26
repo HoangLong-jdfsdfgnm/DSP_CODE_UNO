@@ -7,7 +7,7 @@
 #define pinMOSI     6
 #define pinVCC      8
 #define slaveSelectPin      10
-
+//comment
 #define LED_slow    0
 #define LED_speed   0
 #define LED_high    0
