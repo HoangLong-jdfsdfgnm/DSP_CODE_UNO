@@ -1,19 +1,20 @@
 #include <SPI.h>
 #include <Arduino.h>
 
-#define Uno        49
-#define Mega       48
-#define pinSTR      5
-#define pinCLK      7
-#define pinMOSI     6
-#define pinVCC      8
-#define slaveSelectPin      10
+#define Address_Uno1                    49
+#define Address_Mega                    48
+//
+//#define address_Master                  0x31
+//#define address_Slave                   0x30
 
-#define LED_nhieu    4
-#define LED_slow    3
-#define LED_speed   2
-#define LED_high    1
-#define LED_low     0
+#define pinLED_connect                  7
+#define pinLED_status                   4
+#define pinRS485                        6
+#define pinSPI                          10
+
+#define LED_connect_blink               2
+#define LED_connect_high                1
+#define LED_connect_low                 0
 
 #define   SYMBOL_HEADER_Serial          0x40
 #define   SYMBOL_HEADER_Ethernet        0x24
@@ -23,55 +24,30 @@
 #define   SYMBOL_END                    0x21
 #define   SYMBOL_CHECK                  0x3F
 
-#define pinLED      7
-#define pinRS485    6
-#define RS485_transmiter    digitalWrite(pinRS485, HIGH)  // Data line output high
-#define RS485_recieve       digitalWrite(pinRS485, LOW)  // Data line output high
-#define LED_ON    digitalWrite(pinLED, HIGH)  // Data line output high
-#define LED_OFF   digitalWrite(pinLED, LOW)   // Data line output low
-
-//#define MOSI_HIGH digitalWrite(pinMOSI, HIGH)  // Data line output high
-//#define MOSI_LOW  digitalWrite(pinMOSI, LOW)   // Data line output low
-//#define CLK_HIGH  digitalWrite(pinCLK, HIGH)  // CLK output high
-//#define CLK_LOW   digitalWrite(pinCLK, LOW)   // CLK output low
-//#define STRB_HIGH digitalWrite(pinSTR, HIGH)  // Latch output high
-//#define STRB_LOW  digitalWrite(pinSTR, HIGH)  // Latch output low
-//#define VCC_ON    digitalWrite(pinSTR, HIGH)
-//#define VCC_OFF   digitalWrite(pinSTR, LOW)
-//
-//#define MOSI_OUT  pinMode(pinMOSI, OUTPUT)     // Khai báo chân truyền data
-//#define CLK_OUT   pinMode(pinCLK, OUTPUT)     // Khai báo chân CLK
-//#define STRB_OUT  pinMode(pinSTR, OUTPUT)     // Khai báo chân cho phép truyền
-//#define VCC_OUT   pinMode(pinVCC, OUTPUT)     // Khai báo chân cho phép truyền
-
-//Định nghĩa vị trí các phần trong Frame Serial
-#define   FRAME_HEADER                  0                         
-#define   FRAME_DESTINATION             1
-#define   FRAME_START_DATA              2
-#define   FRAME_DATA_1_1                3
-#define   FRAME_DATA_1_2                4
-#define   FRAME_SEPERATE                5
-#define   FRAME_DATA_2_1                6
-#define   FRAME_DATA_2_2                7
-#define   FRAME_END                     8
-#define   FRAME_CHECKSUM_1              9
-#define   FRAME_CHECKSUM_2              10
+#define enable_SPI          digitalWrite(pinSPI, LOW)
+#define disable_SPI         digitalWrite(pinSPI, HIGH)
+#define RS485_transmiter    digitalWrite(pinRS485, HIGH)
+#define RS485_recieve       digitalWrite(pinRS485, LOW) 
+#define LED_connect_ON      digitalWrite(pinLED_connect, HIGH) 
+#define LED_connect_OFF     digitalWrite(pinLED_connect, LOW)
+#define LED_status_ON       digitalWrite(pinLED_status, HIGH) 
+#define LED_status_OFF      digitalWrite(pinLED_status, LOW)  
 
 /* Khai báo các biến  */
-//const int slaveSelectPin = 10;
 unsigned char number_7seg_A[11] = {0xc0, 0xf9, 0xa4, 0xb0, 0x99, 0x92, 0x82, 0xf8, 0x80, 0x90, 0xff};
-uint8_t state1 = 0;
-uint8_t state2 = 0;
+volatile uint8_t state1 = 0;
+volatile uint8_t checkFrame_Status = 0;
 volatile byte _state = 0;
 volatile uint8_t blinkLED = 0;
 byte Mega_Active  = 0;
 unsigned char buffer_Frame[15];
-uint8_t Size = 11;    // biến lưu kích thước bản tin nhận được từ cổng Serial
+uint8_t Size = 11;                                   // biến lưu kích thước bản tin nhận được từ cổng Serial
 unsigned int Nhiet_do = 0;
 unsigned int Ngoai_quan = 0;
 unsigned int countISR = 0;                          // Khai báo biến đếm số giây delay
+uint8_t times_errorAgain = 0;
 String check = "OK";
-//String buffer_Frame[15];
+
 /* Khai báo các hàm */
 //void sendMega();
 //uint8_t waitting();
@@ -81,80 +57,59 @@ String check = "OK";
 //-----------------------------------------------------------------------------
 /* Phần cài đặt ban đầu */
 void setup(){
-  pinMode(pinLED, OUTPUT);
-  pinMode(pinRS485, OUTPUT);
-  RS485_recieve;
-  Serial.begin(9600);
-  Value_begin();
-  // kiểm tra các thanh LED 7-seg
-  SPI.transfer(number_7seg_A[10]);
-  SPI.transfer(number_7seg_A[10]);
-  SPI.transfer(number_7seg_A[10]);
-  SPI.transfer(number_7seg_A[10]);
+   
+  pinMode_begin();
+  Display_begin();
+  RS485_begin();
 
   while(Mega_Active == 0){        
-    send_Slave2Master(Mega);        
+    send_Slave2Master(Address_Mega);        
     state1 = waitting(15,1000);    
     if(state1 == 1){
-      state2 = recieve_check_Master2Slave();
-      if (state2 == 1){
-        LED_ON;
+      checkFrame_Status = recieve_check_Master2Slave();
+      if (checkFrame_Status == 1){
+        LED_connect_ON;
         Mega_Active = 1;
       }
       else {
-        LED_OFF;
+        LED_connect_OFF;
         state1 = 0;
       }
     }
   }
-  
-  //-------------------------------------------------------------------------------
+  Display(Nhiet_do,Ngoai_quan);
+
+  //===============================================================================
   //    Vòng lăp gửi bản tin đến Mega , cứ sau 30s, nếu có bản tin phản hồi
   // và tin đó đúng thì sẽ bật 1 LED báo là có thiết bị trung tâm kết nối. Khi mất
   // kết nối thì cần reset lại thiết bị trên line đó để kết nối lại.
-  //--------------------------------------------------------------------------------
-//  while(Mega_Active == 0){        // Mega_Active == 0, tức là chưa có kết nối với thiết bị trung tâm
-//    send_Slave2Master(Mega);      // truyền bản tin để kết nối  
-//    state1 = waitting(1,700);     // hàm waitting sẽ chờ phản hồi trong 1 khoảng thời gian lập trình trước và trả về 1 nếu 
-//                                  // trong thời gian đó cổng Serial có dữ liệu truyền đến và nếu quá thời gian mà ko có thì trả về 0
-//                            
-//    if(state1 == 1){              // biến state == 1 nếu có phản hồi từ thiết bị trung tâm
-//      //Serial.println("co ban tin");
-//      delay(100);                 // chờ bản tin đến hết
-//      Size = readUART(c);         // đọc bản tin truyền đến và lưu kích thước bản tin vào biến Size
-////      Serial.print("Size: ");
-////      Serial.println(Size);
-//      state2 = checkFrameUART(c,Size,Mega);          // lưu giá trị bản tin của hàm checkFrameUART (trả về 0: tức là cấu trúc bản tin sai, trả vè 1: tức là đúng)
-////      Serial.print("State2: ");
-////      Serial.println(state2);
-//      if(state2 == 0){            // Nếu cấu trúc bản tin là sai - tức là nhiễu lớn
-//        //Serial.println("Cau truc ban tin: fail!");
-//        state1 = 0;
-//        blinkLED = LED_speed;      // báo nháy LED nếu nhiễu lớn - nháy LED nhanh
-//        state1 = waitting(10,500);      // chờ 30s để tiếp tục thử kết nối lại - có thể dùng hàm delay thay thế
-//      }
-//      else{                       // Nếu bản tin có cấu trúc đúng
-//        // kiểm tra bản tin nhận được
-//        if(c[FRAME_DATA_1_1] == 'O' && c[FRAME_DATA_1_2] == 'K' && c[FRAME_DATA_2_1] == 'O' && c[FRAME_DATA_2_2] == 'K'){
-//          //Serial.println("Noi dung ban tin: ok");
-//          Mega_Active = 1;        // Nếu bản tin nhận được là đúng -->> set biến Mega_Active = 1 báo là đã kết nối thành công!
-//          blinkLED = LED_high;    // bật LED sáng để báo đã kết nối
-//          LED_ON;
-//          Display();
-//        }
-//        else {                    // Nếu bản tin nhận được sai nội dung.
-//          //Serial.println("Noi dung ban tin: fail!");
-//          state1 = 0;
-//          blinkLED = LED_slow;     // báo nháy LED nếu nhiễu nhỏ - tốc độ nháy LED chậm
-//          state1 = waitting(10,500);    // chờ 30s để tiếp tục thử kết nối lại
-//        }
-//      }
-//    }
-//    else{                         // biến state == 0 tức là không có phản hồi từ thiết bị trung tâm 
-//      LED_OFF;                    // tắt LED báo không có kết nối với thiết bị trung tâm
-//      state1 = waitting(10,500);               // chờ 30s để tiếp tục thử kết nối lại
-//    }
-//  }
+  //===============================================================================
+  
+  while(Mega_Active == 0){                      // Mega_Active == 0, tức là chưa có kết nối với thiết bị trung tâm
+    send_Slave2Master(Address_Mega);                    // truyền bản tin để kết nối  
+    state1 = waitting(10,500);                  // hàm waitting sẽ chờ phản hồi trong 1 khoảng thời gian lập trình trước và trả về 1 nếu 
+                                                // trong thời gian đó cổng Serial có dữ liệu truyền đến và nếu quá thời gian mà ko có thì trả về 0
+                            
+    if(state1 == 1){                            // biến state == 1 nếu có phản hồi từ thiết bị trung tâm
+      checkFrame_Status = recieve_check_Master2Slave();    // lưu giá trị bản tin của hàm checkFrameUART (trả về 0: tức là cấu trúc bản tin sai, trả vè 1: tức là đúng)
+      if(checkFrame_Status == 0){                          // Nếu cấu trúc bản tin là sai - tức là nhiễu lớn
+        state1 = 0;
+        blinkLED = LED_connect_blink;                   // báo nháy LED nếu nhiễu lớn - nháy LED nhanh
+        state1 = waitting(10,500);              // chờ 30s để tiếp tục thử kết nối lại - có thể dùng hàm delay thay thế
+      }
+      else{                                     // Nếu bản tin có cấu trúc đúng
+          Mega_Active = 1;                      // Nếu bản tin nhận được là đúng -->> set biến Mega_Active = 1 báo là đã kết nối thành công!
+          blinkLED = LED_connect_high;                  // bật LED sáng để báo đã kết nối
+          LED_connect_ON;
+      }
+    }
+    else{                                      // biến state == 0 tức là không có phản hồi từ thiết bị trung tâm 
+      state1 = waitting(10,500);               // chờ 30s để tiếp tục thử kết nối lại
+    }
+  }
+  
+  state1 = checkFrame_Status = 0;                         // biến state1 = checkFrame_Status = 0 - cài lại giá trị mặc định để sử dụng lưu giá trị trả về của các hàm khác 
+  Display(Nhiet_do,Ngoai_quan);
 }
 
 
@@ -165,80 +120,66 @@ void setup(){
 //
 //-------------------------------------------------------------------------------
 void loop(){
-  state1 = waitting(30,200);
-  if(state1 == 1){
-    recieve_data_Master2Slave(Nhiet_do, Ngoai_quan);
-    Display();
-    Serial.print("nhiet do: ");
-    Serial.println(char(Nhiet_do));
-    Serial.print("Ngoai_quan: ");
-    Serial.println(char(Ngoai_quan));
-    delay(1000);
-  }
-//  /* Kiểm tra giá trị bộ đệm liên tục */
-//  if(Serial.available()){         // Nếu có dữ liệu truyền đến
-//    delay(100);
-//    state1 = state2 = 0;          // biến state1 = state2 = 0 - cài lại giá trị mặc định để sử dụng lưu giá trị trả về của các hàm khác 
-//    Size = 0;                     // Cài lại giá trị mặc định của biến lưu kích thước bản tin nhận được từ cổng Serial
-//    Size = readUART(buffer_Frame);           // đọc bản tin truyền đến và lưu kích thước bản tin vào biến Size
-//  }
-//  else                            // Nếu không có dữ liệu truyền đến thì return để bắt đầu lại
-//    return ;
-//
-//  /* Khi đã đọc bản tin truyền đến thì -->>> Kiểm tra cấu trúc */
-//  state1 = checkFrameUART(buffer_Frame,Size,Uno);          // lưu giá trị bản tin của hàm checkFrameUART (trả về 0: tức là cấu trúc bản tin sai, trả vè 1: tức là đúng)
-//  //Serial.println(state1);
-//  if(state1 == 0){                // nếu bản tin thất bại (cấu trúc sai)
-//    Mega_Active = 2;              // Mega_Active = 2 báo dành đã từng kết nối nhưng có nhiễu lớn bất thường trên đường truyền
-//    blinkLED = LED_nhieu;        // các kiểu báo hiệu khác nhau cho người dùng biết đang ở lỗi nào
-//    //state2 = waitting(10,500);
-//    return ;                      // vẫn quay lại từ đầu quét cổng Serial
-//  }
-//  
-//// Nếu đã qua được hàm kiểm tra lỗi cấu trúc, nghĩa là cấu trúc bản tin đúng 
-//  /* Lấy thông tin để hiển thị */
-//  state2 = GetImfor(buffer_Frame);
-//  if(state2 == 1){
-//    sendUART(buffer_Frame, Size, Mega,'O','K','O','K');
-//    Display();
-//  }
-//  else{
-//    sendUART(buffer_Frame, Size, Mega,'E','R','R','!');
-//    blinkLED = LED_nhieu;                      // báo nháy LED nếu nhiễu nhỏ - tốc độ nháy LED chậm
-//    return ;
-//  }
-
-
+  state1 = waitting(10,1000);
   
+  /* Kiểm tra giá trị bộ đệm liên tục */
+  if(state1 == 1){         // Nếu có dữ liệu truyền đến
+    delay(100);
+    checkFrame_Status = recieve_data_Master2Slave();          // lưu giá trị bản tin của hàm checkFrameUART (trả về 0: tức là cấu trúc bản tin sai, trả vè 1: tức là đúng)
+    if(checkFrame_Status == 5){
+      times_errorAgain ++;
+      send_Again(Address_Mega);
+      blinkLED = LED_connect_blink;
+    }
+    else 
+      blinkLED = LED_connect_high;
+    state1 = 0;
+    Display(Nhiet_do,Ngoai_quan);
+  }
+  else {
+    times_errorAgain ++;
+    if(times_errorAgain == 6){
+      LED_connect_OFF;
+      blinkLED = LED_connect_low;
+    }
+  }
 }
 
 //---------------------------------------------------------------------------------
+void pinMode_begin(){
+  // chế độ các chân kết nối
+  pinMode(pinLED_connect,   OUTPUT);
+  pinMode(pinLED_status,   OUTPUT);
+  pinMode(pinRS485, OUTPUT);
+  pinMode(pinSPI,   OUTPUT);
+
+  LED_connect_OFF;
+  LED_status_OFF;
+}
 //---------------------------------------------------------------------------------
-void Value_begin(){
+void RS485_begin(){
+  Serial.begin(9600);
+  RS485_recieve;
+}
+
+//---------------------------------------------------------------------------------
+void Display_begin(){
   SPI.begin();
+  enable_SPI;
   SPI.transfer(number_7seg_A[8]);
   SPI.transfer(number_7seg_A[8]);
   SPI.transfer(number_7seg_A[8]);
   SPI.transfer(number_7seg_A[8]);
+  disable_SPI;
+  delay (1000);
   /* Biến */
   Size = 11;
-  /* Cấu trúc khung truyền */
-//  c[FRAME_HEADER]      = SYMBOL_HEADER_Serial;
-//  c[FRAME_DESTINATION] = Mega;
-//  c[FRAME_START_DATA]  = SYMBOL_START_DATA;
-//  c[FRAME_DATA_1_1]    = SYMBOL_CHECK;
-//  c[FRAME_DATA_1_2]    = SYMBOL_CHECK;
-//  c[FRAME_SEPERATE]    = SYMBOL_SEPERATE;
-//  c[FRAME_DATA_2_1]    = SYMBOL_CHECK;
-//  c[FRAME_DATA_2_2]    = SYMBOL_CHECK;
-//  c[FRAME_END]         = SYMBOL_END;
-//  c[FRAME_CHECKSUM_1]  = 0;
-//  c[FRAME_CHECKSUM_2]  = 0;
 }
+
 //-----------------------------------------------------
 uint8_t readUART(uint8_t c[]){
   uint8_t i = 0;
-  delay(100);
+  delay(1000);
   while(Serial.available()){
     c[i] = char (Serial.read());
     i++;
@@ -246,49 +187,66 @@ uint8_t readUART(uint8_t c[]){
   return i;
 }
 //----------------------------------------------------
-uint8_t GetImfor(unsigned char data[]){
-  unsigned int error1 = Nhiet_do;                // Biến lưu giá trị lỗi "Nhiệt độ" hiện tại trước khi đọc giá trị mới để so sánh
-  unsigned int error2 = Ngoai_quan;              // Biến lưu giá trị lỗi "Ngoại quan" hiện tại trước khi đọc giá trị mới để so sánh
-  /* đọc giá trị mới */
-  Nhiet_do   = data[FRAME_DATA_1_1]*256 + data[FRAME_DATA_1_2];
-  Ngoai_quan = data[FRAME_DATA_2_1]*256 + data[FRAME_DATA_2_2];
-  /* so sánh các giá trị */
-  if( ( (error1 - Nhiet_do) + (error2 - Ngoai_quan) ) == 1 )      // nếu đúng là 1 trong 2 lỗi tăng lên 1
-    return 1;                                                     
-  else{                                                           // nếu sai tức là có lỗi trong bản tin
-    Nhiet_do    = error1;                                         // đọc lại giá trị Nhiet_do cũ
-    Ngoai_quan  = error2;                                         // đọc lại giá trị Ngoai_quan cũ
-    return 0;                                                     // giá trị trả về 0 - lấy bản tin thất bại 
-   }
-}
+//uint8_t GetImfor(unsigned char data[]){
+//  unsigned int error1 = Nhiet_do;                // Biến lưu giá trị lỗi "Nhiệt độ" hiện tại trước khi đọc giá trị mới để so sánh
+//  unsigned int error2 = Ngoai_quan;              // Biến lưu giá trị lỗi "Ngoại quan" hiện tại trước khi đọc giá trị mới để so sánh
+//  /* đọc giá trị mới */
+//  Nhiet_do   = data[FRAME_DATA_1_1]*256 + data[FRAME_DATA_1_2];
+//  Ngoai_quan = data[FRAME_DATA_2_1]*256 + data[FRAME_DATA_2_2];
+//  /* so sánh các giá trị */
+//  if( ( (error1 - Nhiet_do) + (error2 - Ngoai_quan) ) == 1 )      // nếu đúng là 1 trong 2 lỗi tăng lên 1
+//    return 1;                                                     
+//  else{                                                           // nếu sai tức là có lỗi trong bản tin
+//    Nhiet_do    = error1;                                         // đọc lại giá trị Nhiet_do cũ
+//    Ngoai_quan  = error2;                                         // đọc lại giá trị Ngoai_quan cũ
+//    return 0;                                                     // giá trị trả về 0 - lấy bản tin thất bại 
+//   }
+//}
 
 //----------------------------------------------------
-void Display(){
+void Display(unsigned int b, unsigned int a){
   /* Hiển thị lỗi nhiệt độ */
-  SPI.transfer(number_7seg_A[Nhiet_do % 10]);
-  SPI.transfer(number_7seg_A[Nhiet_do / 10]);
+  
+  SPI.transfer(number_7seg_A[a%10]);
+  SPI.transfer(number_7seg_A[a/10]);
   if(Nhiet_do >= 100){
-    SPI.transfer(number_7seg_A[Nhiet_do / 100]);
+    SPI.transfer(number_7seg_A[a / 100]);
   }
 //  else 
 //    SPI.transfer(number_7seg_A[0]);
 
   /* Hiển thị lỗi Ngoại quan */
-  SPI.transfer(number_7seg_A[Ngoai_quan % 10]);
-  SPI.transfer(number_7seg_A[Ngoai_quan / 10]);
-  if(Nhiet_do >= 100){
-    SPI.transfer(number_7seg_A[Ngoai_quan / 100]);
+  SPI.transfer(number_7seg_A[b % 10]);
+  SPI.transfer(number_7seg_A[b / 10]);
+  if(Ngoai_quan >= 100){
+    SPI.transfer(number_7seg_A[b / 100]);
   }
 //  else 
 //    SPI.transfer(number_7seg_A[0]);
 }
 
 //----------------------------------------------------
-void send_Slave2Master(uint8_t address){
+void send_Again(uint8_t address_Master){
   RS485_transmiter;
   delay(100);
   Serial.print(char(SYMBOL_HEADER_Serial));
-  Serial.print(char(address));
+  Serial.print(char(Address_Mega));
+  Serial.print(",");
+  Serial.print(char(Address_Uno1));
+  Serial.print(",");
+  Serial.print("AGAIN");
+  Serial.print(char(SYMBOL_END));
+  delay(100);
+  RS485_recieve;
+}
+//----------------------------------------------------
+void send_Slave2Master(uint8_t address_Master){
+  RS485_transmiter;
+  delay(100);
+  Serial.print(char(SYMBOL_HEADER_Serial));
+  Serial.print(char(Address_Mega));
+  Serial.print(",");
+  Serial.print(char(Address_Uno1));
   Serial.print(",");
   Serial.print(check);
   Serial.print(char(SYMBOL_END));
@@ -329,7 +287,7 @@ uint8_t recieve_check_Master2Slave(){
   /* Kiểm tra cấu trúc bên trong */
   for(byte i = (poisition_header+1); i < poisition_end; i++){
     if(buffer_Frame[i] == SYMBOL_SEPERATE){
-      if (buffer_Frame[i-1] == Uno) 
+      if (buffer_Frame[i-1] == Address_Uno1) 
         check ++;
       if ((buffer_Frame[i+1] == 'O') && (buffer_Frame[i+2] == 'K'))
         check ++;
@@ -343,7 +301,7 @@ uint8_t recieve_check_Master2Slave(){
     //chưa có phần check Sum
 }
 //----------------------------------------------------
-void recieve_data_Master2Slave(unsigned int data1, unsigned int data2){
+uint8_t recieve_data_Master2Slave(){
   /* Kiểm tra cấu trúc (@1,data1,data2!) */
   uint8_t poisition_header = 0;
   uint8_t poisition_end = 0;
@@ -353,111 +311,101 @@ void recieve_data_Master2Slave(unsigned int data1, unsigned int data2){
   unsigned int sum = 0;
   uint8_t sizeData1 = 0;
   uint8_t sizeData2 = 0;
-  delay(100);
+  unsigned int error1 = Nhiet_do;                // Biến lưu giá trị lỗi "Nhiệt độ" hiện tại trước khi đọc giá trị mới để so sánh
+  unsigned int error2 = Ngoai_quan;              // Biến lưu giá trị lỗi "Ngoại quan" hiện tại trước khi đọc giá trị mới để so sánh
   Size = readUART(buffer_Frame);
-  delay(1000);
-  for (uint8_t i =0; i<Size; i++){
-  Serial.print((buffer_Frame[i]));
-  }
-  Serial.print("Size: ");
-  Serial.print(Size);
-  Serial.println();
-  delay(1000);
-  uint8_t out =1;
-while(out){
-  switch(state){
-             /* Kiểm tra phần checksum */
-    case 0:
-    //Serial.println("case 0: checksum-ok");
-//       sum = checkSum(buffer_Frame, Size -2);
-//       if( (buffer_Frame[Size -2] != (sum >> 8)) || (buffer_Frame[Size -1] != (sum & 0xff)))
-//         state = 0;
-//       else 
-        state = 1;
-       break;
-       
-          /* Kiểm tra có ký tự đầu ko */
-    case 1:
-      //Serial.println("case 1: check-ok");
-      for(uint8_t i = 0; i < Size; i++){
-        if(buffer_Frame[i] == SYMBOL_HEADER_Serial){
-          poisition_header = i;
-          state = 2;
-          Serial.println("case 1: header-ok");
-          break;
-        }
-        else 
-          state = 0;
-      }
-      
-      break;
-      
-            /* Kiểm tra có ký tự cuối ko */
-    case 2:
-      for(uint8_t i = (poisition_header +1); i < Size; i++){
-        if(buffer_Frame[i] == SYMBOL_END){
-           poisition_end = i;
-           state = 3;
-           Serial.println("case 2: end-ok");
-           break;
-        }
-        else 
-          state = 0;
-      }
-      break;
-      
-                /* Kiểm tra địa chỉ */     
-    case 3:
-      for(uint8_t i = poisition_header; i < poisition_end; i++){
-        if(buffer_Frame[i] == SYMBOL_SEPERATE){
-          poisition_seperate1 = i;
-          if (buffer_Frame[i-1] == Uno){
-            state = 4;
-            Serial.println("case 3: addr-ok");
-          }
-          break;
-        }
-        else
-          state = 0;
-      }
-      break;
+               /* Kiểm tra phần checksum */
+//   sum = checkSum(buffer_Frame, Size -2);
+//   if( (buffer_Frame[Size -2] != (sum >> 8)) || (buffer_Frame[Size -1] != (sum & 0xff))){
+//      return 1;
+//   }
+//   else 
+    state ++;
 
-              /* Đọc dữ liệu */
-    case 4:
-      for(uint8_t i = (poisition_seperate1+1); i < poisition_end; i++){
-        if(buffer_Frame[i] == SYMBOL_SEPERATE){
-          poisition_seperate2 = i;
-           Serial.println("case 4: , -ok");
-          break;
-        }
-      }
-      sizeData1 = poisition_seperate2 - poisition_seperate1 - 1;
-      sizeData2 = poisition_end - poisition_seperate2 - 1;
-      /* Đọc giá trị data1 */
-      if(sizeData1 == 1)
-        data1 = buffer_Frame[poisition_seperate1 + 1] -48;
-      else
-        if(sizeData1 == 2)
-          data1 = (buffer_Frame[poisition_seperate1 + 1] -48)*10 + (buffer_Frame[poisition_seperate1 + 2] -48);
-        else
-          if(sizeData1 == 3)
-            data1 = (buffer_Frame[poisition_seperate1 + 1] -48)*100 + (buffer_Frame[poisition_seperate1 + 2] -48)* 10 + (buffer_Frame[poisition_seperate1 + 3]-48);
-      /* Đọc giá trị data2 */     
-      if(sizeData2 == 1)
-        data2 = buffer_Frame[poisition_seperate2 + 1];
-      else
-        if(sizeData2 == 2)
-          data2 = buffer_Frame[poisition_seperate2 + 1]*10 + buffer_Frame[poisition_seperate2 + 2];
-        else
-          if(sizeData2 == 3)
-            data2 = buffer_Frame[poisition_seperate2 + 1]*100 + buffer_Frame[poisition_seperate2 + 2]* 10 + buffer_Frame[poisition_seperate2 + 3];
-            state = 5;
-      break;
-       
-      case 5:
-        out = 0;
+            /* Kiểm tra có ký tự đầu ko */
+  for(uint8_t i = 0; i < Size; i++){
+    if(buffer_Frame[i] == SYMBOL_HEADER_Serial){
+      poisition_header = i;
+      state ++;
+    }
   }
-}
+  
+  if(state != 2){
+    return 2;
+  }
+              /* Kiểm tra có ký tự cuối ko */
+  for(uint8_t i = (poisition_header +1); i < Size; i++){
+    if(buffer_Frame[i] == SYMBOL_END){
+       poisition_end = i;
+       state++;
+    }
+  }
+  if(state != 3){
+    return 3;
+  }    
+                  /* Kiểm tra địa chỉ */     
+  for(uint8_t i = poisition_header; i < poisition_end; i++){
+    if(buffer_Frame[i] == SYMBOL_SEPERATE){
+      poisition_seperate1 = i;
+      state ++;
+      if (buffer_Frame[i-1] == Address_Uno1){
+        state ++;
+      }
+      break;
+    }
+  }
+  if(state != 5){
+    return state;
+  }
+                /* Đọc dữ liệu */
+  for(uint8_t i = (poisition_seperate1+1); i < poisition_end; i++){
+    if(buffer_Frame[i] == SYMBOL_SEPERATE){
+      poisition_seperate2 = i;
+      state ++;
+      break;
+    }
+  }
+  if(state != 6){
+    return 6;
+  } 
+  sizeData1 = poisition_seperate2 - poisition_seperate1 - 1;
+  sizeData2 = poisition_end - poisition_seperate2 - 1;
+  /* Đọc giá trị data1 */
+  if(sizeData1 == 1)
+    Nhiet_do = buffer_Frame[poisition_seperate1 + 1] -48;
+  else
+    if(sizeData1 == 2)
+      Nhiet_do = (buffer_Frame[poisition_seperate1 + 1] -48)*10 + (buffer_Frame[poisition_seperate1 + 2] -48);
+    else
+      if(sizeData1 == 3)
+        Nhiet_do = (buffer_Frame[poisition_seperate1 + 1] -48)*100 + (buffer_Frame[poisition_seperate1 + 2] -48)* 10 + (buffer_Frame[poisition_seperate1 + 3]-48);
+  /* Đọc giá trị data2 */     
+  if(sizeData2 == 1)
+    Ngoai_quan = buffer_Frame[poisition_seperate2 + 1]-48;
+  else
+    if(sizeData2 == 2)
+      Ngoai_quan = (buffer_Frame[poisition_seperate2 + 1]-48)*10 + buffer_Frame[poisition_seperate2 + 2]-48;
+    else
+      if(sizeData2 == 3)
+        Ngoai_quan = (buffer_Frame[poisition_seperate2 + 1]-48)*100 + (buffer_Frame[poisition_seperate2 + 2]-48)* 10 + buffer_Frame[poisition_seperate2 + 3]-48;
+   return 0;    
+//  /* so sánh các giá trị */
+//  
+//  Serial.print("Nhiet do: ");
+//  Serial.println(Nhiet_do);
+//  Serial.print("Ngoai quan: ");
+//  Serial.println(Ngoai_quan);
+//  Serial.print("error1: ");
+//  Serial.println(error1);
+//  Serial.print("error2: ");
+//  Serial.println(error2);
+//  if( ( (Nhiet_do - error1) + (Ngoai_quan - error2) ) == 1 )      // nếu đúng là 1 trong 2 lỗi tăng lên 1
+//    return 0;                                                     
+//  else{                                                           // nếu sai tức là có lỗi trong bản tin
+//    Nhiet_do    = error1;                                         // đọc lại giá trị Nhiet_do cũ
+//    Ngoai_quan  = error2;                                         // đọc lại giá trị Ngoai_quan cũ
+//    return 7;                                                     // giá trị trả về 0 - lấy bản tin thất bại 
+//   }
 }
 
 
@@ -466,8 +414,8 @@ int checkSum (unsigned char checkSum[], byte Size){
   unsigned int sum = 0;
   for (byte c = 0; c < Size; c++){
     sum += checkSum[c];
-    Serial.print("Sum: ");
-    Serial.println(sum);
+//    Serial.print("Sum: ");
+//    Serial.println(sum);
   }
   return sum;
  }
@@ -476,39 +424,39 @@ int checkSum (unsigned char checkSum[], byte Size){
     _state = 1;
     switch(blinkLED){
     //Serial.println("vao phan blinkLED:");
-      case LED_low:
-        //Serial.println("vao phan LED_low");
-        LED_OFF;
+      case LED_connect_low:
+        //Serial.println("vao phan LED_connect_low");
+        LED_connect_OFF;
         break;
         
-      case LED_high:
-        //Serial.println("vao phan LED_high");
-        LED_ON;
+      case LED_connect_high:
+        //Serial.println("vao phan LED_connect_high");
+        LED_connect_ON;
         break;
         
-      case LED_speed:
-        //Serial.println("vao phan LED_speed");
+      case LED_connect_blink:
+        //Serial.println("vao phan LED_connect_blink");
         if ((countISR % 2) == 0)
-          LED_ON;
+          LED_connect_ON;
         else
-          LED_OFF;
+          LED_connect_OFF;
         break;
         
-      case LED_slow:
-        //Serial.println("vao phan LED_slow");
-        if ((countISR % 3) == 0)
-          LED_ON;
-        else
-          LED_OFF;
-        break;
-        
-      case LED_nhieu:
-        //Serial.println("vao phan LED_nhieu");
-        if (((countISR % 11) == 0) || ((countISR % 12) == 0) || ((countISR % 13) == 0))
-          LED_ON;
-        else
-          LED_OFF;
-        break;
+//      case LED_slow:
+//        //Serial.println("vao phan LED_slow");
+//        if ((countISR % 3) == 0)
+//          LED_connect_ON;
+//        else
+//          LED_connect_OFF;
+//        break;
+//        
+//      case LED_nhieu:
+//        //Serial.println("vao phan LED_nhieu");
+//        if (((countISR / 11) == 1) || ((countISR / 12) == 1) || ((countISR / 13) == 1))
+//          LED_connect_ON;
+//        else
+//          LED_connect_OFF;
+//        break;
         
       default:
         break;
@@ -531,8 +479,6 @@ uint8_t waitting(byte times, int ms){
   sei();                                 // cho phép ngắt toàn cục
   
   while(countISR < times){               // so sánh số lần lỗi
-//    Serial.print("countISR: ");
-//    Serial.println(countISR);
     if (_state == 1){                    // Nếu cờ báo tràn lên 1: _state == 1 (Over time)
       _state = 0;                        // Xóa biến _state = 0
       countISR ++;                       // tăng biến đến số lần ngắt thêm 1 đơn vị
