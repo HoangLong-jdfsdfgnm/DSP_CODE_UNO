@@ -62,29 +62,30 @@ void setup(){
   Display_begin();
   RS485_begin();
 
-  while(Mega_Active == 0){        
-    send_Slave2Master(Address_Mega);        
-    state1 = waitting(15,1000);    
-    if(state1 == 1){
-      checkFrame_Status = recieve_check_Master2Slave();
-      if (checkFrame_Status == 1){
-        LED_connect_ON;
-        Mega_Active = 1;
-      }
-      else {
-        LED_connect_OFF;
-        state1 = 0;
-      }
-    }
-  }
-  Display(Nhiet_do,Ngoai_quan);
+//  while(Mega_Active == 0){        
+//    send_Slave2Master(Address_Mega);        
+//    state1 = waitting(15,1000);    
+//    if(state1 == 1){
+//      checkFrame_Status = recieve_check_Master2Slave();
+//      if (checkFrame_Status == 1){
+//        LED_connect_ON;
+//        Mega_Active = 1;
+//      }
+//      else {
+//        LED_connect_OFF;
+//        state1 = 0;
+//      }
+//    }
+//  }
+//  Display(Nhiet_do,Ngoai_quan);
 
   //===============================================================================
   //    Vòng lăp gửi bản tin đến Mega , cứ sau 30s, nếu có bản tin phản hồi
   // và tin đó đúng thì sẽ bật 1 LED báo là có thiết bị trung tâm kết nối. Khi mất
   // kết nối thì cần reset lại thiết bị trên line đó để kết nối lại.
   //===============================================================================
-  
+
+  blinkLED = LED_connect_blink;
   while(Mega_Active == 0){                      // Mega_Active == 0, tức là chưa có kết nối với thiết bị trung tâm
     send_Slave2Master(Address_Mega);                    // truyền bản tin để kết nối  
     state1 = waitting(10,500);                  // hàm waitting sẽ chờ phản hồi trong 1 khoảng thời gian lập trình trước và trả về 1 nếu 
@@ -99,8 +100,6 @@ void setup(){
       }
       else{                                     // Nếu bản tin có cấu trúc đúng
           Mega_Active = 1;                      // Nếu bản tin nhận được là đúng -->> set biến Mega_Active = 1 báo là đã kết nối thành công!
-          blinkLED = LED_connect_high;                  // bật LED sáng để báo đã kết nối
-          LED_connect_ON;
       }
     }
     else{                                      // biến state == 0 tức là không có phản hồi từ thiết bị trung tâm 
@@ -108,6 +107,8 @@ void setup(){
     }
   }
   
+  blinkLED = LED_connect_high;                            // bật LED sáng để báo đã kết nối
+  LED_connect_ON;
   state1 = checkFrame_Status = 0;                         // biến state1 = checkFrame_Status = 0 - cài lại giá trị mặc định để sử dụng lưu giá trị trả về của các hàm khác 
   Display(Nhiet_do,Ngoai_quan);
 }
@@ -126,23 +127,23 @@ void loop(){
   if(state1 == 1){         // Nếu có dữ liệu truyền đến
     delay(100);
     checkFrame_Status = recieve_data_Master2Slave();          // lưu giá trị bản tin của hàm checkFrameUART (trả về 0: tức là cấu trúc bản tin sai, trả vè 1: tức là đúng)
-    if(checkFrame_Status == 5){
-      times_errorAgain ++;
+    if((checkFrame_Status != 6) && (checkFrame_Status != 0)){
+//      times_errorAgain ++;
       send_Again(Address_Mega);
-      blinkLED = LED_connect_blink;
+//      blinkLED = LED_connect_blink;
     }
-    else 
-      blinkLED = LED_connect_high;
+//    else {
+//    blinkLED = LED_connect_high;
     state1 = 0;
     Display(Nhiet_do,Ngoai_quan);
   }
-  else {
-    times_errorAgain ++;
-    if(times_errorAgain == 6){
-      LED_connect_OFF;
-      blinkLED = LED_connect_low;
-    }
-  }
+//  else {
+//    times_errorAgain ++;
+//    if(times_errorAgain == 6){
+//      LED_connect_OFF;
+//      blinkLED = LED_connect_low;
+//    }
+//  }
 }
 
 //---------------------------------------------------------------------------------
@@ -179,11 +180,13 @@ void Display_begin(){
 //-----------------------------------------------------
 uint8_t readUART(uint8_t c[]){
   uint8_t i = 0;
-  delay(1000);
+  LED_status_ON;
+  delay(300);
   while(Serial.available()){
     c[i] = char (Serial.read());
     i++;
   }
+  LED_status_OFF;
   return i;
 }
 //----------------------------------------------------
@@ -343,21 +346,18 @@ uint8_t recieve_data_Master2Slave(){
   if(state != 3){
     return 3;
   }    
-                  /* Kiểm tra địa chỉ */     
+                  /* Kiểm tra dấu ngăn cách1 */ 
   for(uint8_t i = poisition_header; i < poisition_end; i++){
     if(buffer_Frame[i] == SYMBOL_SEPERATE){
       poisition_seperate1 = i;
       state ++;
-      if (buffer_Frame[i-1] == Address_Uno1){
-        state ++;
-      }
       break;
     }
   }
-  if(state != 5){
-    return state;
+  if(state != 4){
+    return 4;
   }
-                /* Đọc dữ liệu */
+                 /* Kiểm tra dấu ngăn cách2 */ 
   for(uint8_t i = (poisition_seperate1+1); i < poisition_end; i++){
     if(buffer_Frame[i] == SYMBOL_SEPERATE){
       poisition_seperate2 = i;
@@ -365,9 +365,16 @@ uint8_t recieve_data_Master2Slave(){
       break;
     }
   }
-  if(state != 6){
-    return 6;
+  if(state != 5){
+    return 5;
   } 
+                  /* Kiểm tra địa chỉ */ 
+  if (buffer_Frame[poisition_seperate1 -1] == Address_Uno1){
+    state ++;
+  }
+  else
+    return 6;
+              /* Đọc dữ liệu */
   sizeData1 = poisition_seperate2 - poisition_seperate1 - 1;
   sizeData2 = poisition_end - poisition_seperate2 - 1;
   /* Đọc giá trị data1 */
