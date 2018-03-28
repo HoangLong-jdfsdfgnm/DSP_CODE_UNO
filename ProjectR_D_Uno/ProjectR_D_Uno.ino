@@ -3,9 +3,6 @@
 
 #define Address_Uno1                    49
 #define Address_Mega                    48
-//
-//#define address_Master                  0x31
-//#define address_Slave                   0x30
 
 #define pinLED_connect                  7
 #define pinLED_status                   4
@@ -127,7 +124,7 @@ void loop(){
   if(state1 == 1){         // Nếu có dữ liệu truyền đến
     delay(100);
     checkFrame_Status = recieve_data_Master2Slave();          // lưu giá trị bản tin của hàm checkFrameUART (trả về 0: tức là cấu trúc bản tin sai, trả vè 1: tức là đúng)
-    if((checkFrame_Status != 6) && (checkFrame_Status != 0)){
+    if((checkFrame_Status != 8) && (checkFrame_Status != 0)){
 //      times_errorAgain ++;
       send_Again(Address_Mega);
 //      blinkLED = LED_connect_blink;
@@ -189,22 +186,6 @@ uint8_t readUART(uint8_t c[]){
   LED_status_OFF;
   return i;
 }
-//----------------------------------------------------
-//uint8_t GetImfor(unsigned char data[]){
-//  unsigned int error1 = Nhiet_do;                // Biến lưu giá trị lỗi "Nhiệt độ" hiện tại trước khi đọc giá trị mới để so sánh
-//  unsigned int error2 = Ngoai_quan;              // Biến lưu giá trị lỗi "Ngoại quan" hiện tại trước khi đọc giá trị mới để so sánh
-//  /* đọc giá trị mới */
-//  Nhiet_do   = data[FRAME_DATA_1_1]*256 + data[FRAME_DATA_1_2];
-//  Ngoai_quan = data[FRAME_DATA_2_1]*256 + data[FRAME_DATA_2_2];
-//  /* so sánh các giá trị */
-//  if( ( (error1 - Nhiet_do) + (error2 - Ngoai_quan) ) == 1 )      // nếu đúng là 1 trong 2 lỗi tăng lên 1
-//    return 1;                                                     
-//  else{                                                           // nếu sai tức là có lỗi trong bản tin
-//    Nhiet_do    = error1;                                         // đọc lại giá trị Nhiet_do cũ
-//    Ngoai_quan  = error2;                                         // đọc lại giá trị Ngoai_quan cũ
-//    return 0;                                                     // giá trị trả về 0 - lấy bản tin thất bại 
-//   }
-//}
 
 //----------------------------------------------------
 void Display(unsigned int b, unsigned int a){
@@ -258,14 +239,15 @@ void send_Slave2Master(uint8_t address_Master){
 }
 //----------------------------------------------------
 uint8_t recieve_check_Master2Slave(){
-  /* Kiểm tra cấu trúc (@0,OK!) */
+  /* Kiểm tra cấu trúc (@0,1,OK!) */
   uint8_t poisition_header = 0;
   uint8_t poisition_end = 0;
-  uint8_t poisition_seperate = 0;
+  uint8_t poisition_seperate1 = 0;
+  uint8_t poisition_seperate2 = 0;
   uint8_t check = 0;
   Size = readUART(buffer_Frame);
 
-  /* Kiểm tra có ký tự đầu ko */
+          /* Kiểm tra có ký tự đầu ko */
   for(uint8_t i =0; i < Size; i++){
     if(buffer_Frame[i] == SYMBOL_HEADER_Serial){
       poisition_header = i;
@@ -274,9 +256,10 @@ uint8_t recieve_check_Master2Slave(){
   }
   
   if(check != 1){
-    return 0;
+    return 1;
   }  
-   /* Kiểm tra có ký tự cuối ko */
+  
+           /* Kiểm tra có ký tự cuối ko */
   for(uint8_t i = poisition_header; i < Size; i++){
     if(buffer_Frame[i] == SYMBOL_END){
        poisition_end = i;
@@ -285,22 +268,56 @@ uint8_t recieve_check_Master2Slave(){
   }
   
   if(check != 2){
-    return 0;
+    return 2;
   }
-  /* Kiểm tra cấu trúc bên trong */
+  
+             /* Kiểm tra dấu phẩy 1 */
   for(byte i = (poisition_header+1); i < poisition_end; i++){
     if(buffer_Frame[i] == SYMBOL_SEPERATE){
-      if (buffer_Frame[i-1] == Address_Uno1) 
-        check ++;
-      if ((buffer_Frame[i+1] == 'O') && (buffer_Frame[i+2] == 'K'))
-        check ++;
+      poisition_seperate1 = i;
+      check ++;
+      break;
     }
   }
-   if(check == 4){
-    return 1;
+  if(check != 3){
+    return 3;
   }
-  else 
-    return 0;
+  
+            /* Kiểm tra dấu phẩy 2 */
+  for(byte i = (poisition_seperate1 +1); i < poisition_end; i++){
+    if(buffer_Frame[i] == SYMBOL_SEPERATE){
+      poisition_seperate2 = i;
+      check ++;
+    }
+  }
+  if(check != 4){
+    return 4;
+  }
+  
+           /* Kiểm tra địa chỉ Master */
+  if (buffer_Frame[poisition_seperate1 -1] == Address_Mega) 
+    check ++;
+
+  if(check != 5){
+    return 5;
+  }
+          /* Kiểm tra địa chỉ Slave */
+  if (buffer_Frame[poisition_seperate2 -1] == Address_Uno1)
+    check ++;
+    
+  if(check != 6){
+    return 6;
+  }
+  
+          /* Kiểm tra địa chỉ Slave */
+  if ((buffer_Frame[poisition_seperate2 +1] == 'O') && (buffer_Frame[poisition_seperate2 +2] == 'K'))
+    check ++;
+    
+  if(check != 7){
+    return 7;
+  }
+
+  return 0;
     //chưa có phần check Sum
 }
 //----------------------------------------------------
@@ -308,6 +325,7 @@ uint8_t recieve_data_Master2Slave(){
   /* Kiểm tra cấu trúc (@1,data1,data2!) */
   uint8_t poisition_header = 0;
   uint8_t poisition_end = 0;
+  uint8_t poisition_seperate = 0;
   uint8_t poisition_seperate1 = 0;
   uint8_t poisition_seperate2 = 0;
   uint8_t state = 0;
@@ -346,10 +364,10 @@ uint8_t recieve_data_Master2Slave(){
   if(state != 3){
     return 3;
   }    
-                  /* Kiểm tra dấu ngăn cách1 */ 
+                    /* Kiểm tra dấu ngăn cách  */ 
   for(uint8_t i = poisition_header; i < poisition_end; i++){
     if(buffer_Frame[i] == SYMBOL_SEPERATE){
-      poisition_seperate1 = i;
+      poisition_seperate = i;
       state ++;
       break;
     }
@@ -357,7 +375,18 @@ uint8_t recieve_data_Master2Slave(){
   if(state != 4){
     return 4;
   }
-                 /* Kiểm tra dấu ngăn cách2 */ 
+                  /* Kiểm tra dấu ngăn cách 1 */ 
+  for(uint8_t i = (poisition_seperate +1); i < poisition_end; i++){
+    if(buffer_Frame[i] == SYMBOL_SEPERATE){
+      poisition_seperate1 = i;
+      state ++;
+      break;
+    }
+  }
+  if(state != 5){
+    return 5;
+  }
+                 /* Kiểm tra dấu ngăn cách 2 */ 
   for(uint8_t i = (poisition_seperate1+1); i < poisition_end; i++){
     if(buffer_Frame[i] == SYMBOL_SEPERATE){
       poisition_seperate2 = i;
@@ -365,19 +394,41 @@ uint8_t recieve_data_Master2Slave(){
       break;
     }
   }
-  if(state != 5){
-    return 5;
+  if(state != 6){
+    return 6;
   } 
-                  /* Kiểm tra địa chỉ */ 
+                  /* Kiểm tra địa chỉ Master*/ 
+  if (buffer_Frame[poisition_seperate -1] == Address_Mega){
+    state ++;
+  }
+  else
+    return 7;
+                  /* Kiểm tra địa chỉ Slave*/ 
   if (buffer_Frame[poisition_seperate1 -1] == Address_Uno1){
     state ++;
   }
   else
-    return 6;
+    return 8;
+
               /* Đọc dữ liệu */
   sizeData1 = poisition_seperate2 - poisition_seperate1 - 1;
   sizeData2 = poisition_end - poisition_seperate2 - 1;
-  /* Đọc giá trị data1 */
+  
+            /* Kiểm tra giá trị đọc được */
+  for(uint8_t i = 1; i<= sizeData1; i++){
+//   Serial.print("sizeData1: ");
+//   Serial.println(char(sizeData1+48));
+//   Serial.print("buffer_Frame: ");
+//   Serial.println(char(buffer_Frame[poisition_seperate1 + i]));
+    if((buffer_Frame[poisition_seperate1 + i] < 48) || (buffer_Frame[poisition_seperate1 + i] > 58))
+      return 9;
+  } 
+  for(uint8_t i = 1; i< sizeData2; i++){
+    if((buffer_Frame[poisition_seperate2 + i] < 48) || (buffer_Frame[poisition_seperate2 + i] > 58))
+      return 10;
+  }
+  
+            /* Đọc giá trị data1 */
   if(sizeData1 == 1)
     Nhiet_do = buffer_Frame[poisition_seperate1 + 1] -48;
   else
@@ -385,8 +436,9 @@ uint8_t recieve_data_Master2Slave(){
       Nhiet_do = (buffer_Frame[poisition_seperate1 + 1] -48)*10 + (buffer_Frame[poisition_seperate1 + 2] -48);
     else
       if(sizeData1 == 3)
-        Nhiet_do = (buffer_Frame[poisition_seperate1 + 1] -48)*100 + (buffer_Frame[poisition_seperate1 + 2] -48)* 10 + (buffer_Frame[poisition_seperate1 + 3]-48);
-  /* Đọc giá trị data2 */     
+        Nhiet_do = (buffer_Frame[poisition_seperate1 + 1] -48)*100 + (buffer_Frame[poisition_seperate1 + 2] -48)* 10 + (buffer_Frame[poisition_seperate1 + 3] -48);
+        
+          /* Đọc giá trị data2 */     
   if(sizeData2 == 1)
     Ngoai_quan = buffer_Frame[poisition_seperate2 + 1]-48;
   else
@@ -430,40 +482,20 @@ int checkSum (unsigned char checkSum[], byte Size){
  ISR (TIMER1_OVF_vect) {
     _state = 1;
     switch(blinkLED){
-    //Serial.println("vao phan blinkLED:");
       case LED_connect_low:
-        //Serial.println("vao phan LED_connect_low");
         LED_connect_OFF;
         break;
         
       case LED_connect_high:
-        //Serial.println("vao phan LED_connect_high");
         LED_connect_ON;
         break;
         
       case LED_connect_blink:
-        //Serial.println("vao phan LED_connect_blink");
         if ((countISR % 2) == 0)
           LED_connect_ON;
         else
           LED_connect_OFF;
         break;
-        
-//      case LED_slow:
-//        //Serial.println("vao phan LED_slow");
-//        if ((countISR % 3) == 0)
-//          LED_connect_ON;
-//        else
-//          LED_connect_OFF;
-//        break;
-//        
-//      case LED_nhieu:
-//        //Serial.println("vao phan LED_nhieu");
-//        if (((countISR / 11) == 1) || ((countISR / 12) == 1) || ((countISR / 13) == 1))
-//          LED_connect_ON;
-//        else
-//          LED_connect_OFF;
-//        break;
         
       default:
         break;
